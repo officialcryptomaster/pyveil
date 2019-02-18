@@ -1,0 +1,12 @@
+export PYVEIL_ENV_NAME="./pyveil_env"
+
+if [[ -d $PYVEIL_ENV_NAME ]]; then
+    echo "python environment is already set up in $PYVEIL_ENV_NAME"
+    source $PYVEILENV_NAME/bin/activate
+else
+    echo "setting up environment $PYVEIL_ENV_NAME ..."
+    virtualenv -p python3 ./$PYVEIL_ENV_NAME;
+    source $PYVEIL_ENV_NAME/bin/activate;
+    pip3 install -r requirements.txt;
+fi;
+

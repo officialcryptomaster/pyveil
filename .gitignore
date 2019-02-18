@@ -1,0 +1,27 @@
+# vim temp files
+.~
+*.swp
+*.swo
+
+# temp OS files
+.DS_Store
+
+# notebook checkpoints
+notebooks/.ipynb_checkpoints/*
+
+# environment and packages
+pyveil_env
+
+# python cache files
+*__pycache__*
+
+#pytest cache files
+.pytest_cache
+
+# log files
+log/*
+*.log
+
+
+# Notebook starting with ZZ (test notebook etc)
+ZZ*.ipynb
