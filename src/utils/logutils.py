@@ -18,7 +18,9 @@ def setup_logger(
     """Set up a logger which optionally also logs to file
 
     Keyword arguments:
-    logger_name -- string name of logger
+    logger_name -- string name of logger. Note that if you set up a logger with
+        a previously used name, you will simply change properties of the existing
+        logger, so be careful!
     file_name -- string name of logging file. If nothing provided, will not log
         to file
     log_to_std_out -- boolean of whether the log should be output to stdout
