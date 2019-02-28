@@ -3,6 +3,7 @@ Client for interacting with veil.co API
 
 author: officialcryptomaster@gmail.com
 """
+from typing import NamedTuple
 import logging
 import requests
 from veil.constants import NETWORK_INFO
@@ -13,10 +14,16 @@ from utils.logutils import setup_logger
 LOGGER = setup_logger(__name__, log_level=logging.DEBUG)
 
 
-class MarketStatus:  # pylint: disable=too-few-public-methods
+class MarketStatus(NamedTuple):  # pylint: disable=too-few-public-methods
     """MarketStatus value strings"""
     OPEN = "open"
     RESOLVED = "resolved"
+
+
+class TokenType(NamedTuple):  # pylint: disable=too-few-public-methods
+    """TokenType value strings"""
+    LONG = "long"
+    SHORT = "short"
 
 
 class VeilClient(ZeroExWeb3Client):
@@ -149,9 +156,9 @@ class VeilClient(ZeroExWeb3Client):
         Note: Public endpoint, does not need an account
 
         Keyword arguments:
-        channel -- str from `constants.VeilChannel` for filtering
+        channel -- str from of channel for filtering
             (default: None which means no filtering based on channel)
-        status -- str from `constants.VeilStatus` for filtering
+        status -- str from `MarketStatus` enum for filtering
             (default: None which means no filtering based on status)
         page -- interger page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
@@ -180,24 +187,24 @@ class VeilClient(ZeroExWeb3Client):
 
     def get_market(
         self,
-        slug,
+        market_slug,
         force_refresh=False,
     ):
-        """Fetch a single market using "slug" (a relatively short human-readable identifier)
+        """Fetch a single market using the market "slug" identifier
         Note: Public endpoint, does not need an account
 
         Keyword arguments:
-        slug -- string "slug" (relatively short human-readable identifier)
+        market_slug -- string "slug" (relatively short human-readable identifier)
             from /markets API call
         force_refresh -- boolean of whether results should be fetched again
             from server or from in-memory cache (default: False)
         """
         if not force_refresh and self._markets is not None:
-            _markets = self._markets.get(slug)
+            _markets = self._markets.get(market_slug)
             if _markets is not None:
                 return _markets
         _market = self._request_get(
-            url="{}{}/{}".format(self._veil_api_url, "markets", slug),
+            url="{}{}/{}".format(self._veil_api_url, "markets", market_slug),
         )["data"]
-        self._markets[slug] = _market
+        self._markets[market_slug] = _market
         return _market
