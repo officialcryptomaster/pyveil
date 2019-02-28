@@ -89,7 +89,7 @@ class ZrxOrderInfo:  # pylint: disable=too-few-public-methods
 class ZeroExWeb3Client(Web3Client):
     """Client for interacting with 0x """
 
-    __name__ = "ZrxWeb3Client"
+    __name__ = "ZeroExWeb3Client"
 
     def __init__(
         self,
@@ -97,7 +97,7 @@ class ZeroExWeb3Client(Web3Client):
         web3_rpc_url,
         private_key=None,
     ):
-        """Create an instance of the Web3Client with a private key
+        """Create an instance of the ZeroExWeb3Client
 
         Keyword arguments:
         network_id -- numerable id of networkId convertible to `constants.NetworkId`

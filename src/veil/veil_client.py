@@ -6,14 +6,20 @@ author: officialcryptomaster@gmail.com
 import logging
 import requests
 from veil.constants import NETWORK_INFO
-from veil.web3utils import Web3Client
+from utils.zeroexutils import ZeroExWeb3Client
 from utils.logutils import setup_logger
 
 
-LOGGER = setup_logger(__name__, log_level=logging.INFO)
+LOGGER = setup_logger(__name__, log_level=logging.DEBUG)
 
 
-class VeilClient(Web3Client):
+class MarketStatus:  # pylint: disable=too-few-public-methods
+    """MarketStatus value strings"""
+    OPEN = "open"
+    RESOLVED = "resolved"
+
+
+class VeilClient(ZeroExWeb3Client):
     """Client for interacting with veil.co API"""
 
     __name__ = "VeilClient"
@@ -37,52 +43,90 @@ class VeilClient(Web3Client):
             web3_rpc_url=web3_rpc_url,
             private_key=private_key,
         )
-        self._veil_api_url = NETWORK_INFO[self._network_id]["veil_api_url"]
+        self._veil_api_url = NETWORK_INFO[self.network_id]["veil_api_url"]
         # cache markets by filter tuple
         self._markets = {}
 
+    @staticmethod
     def _request_get(
+        url,
+        params=None,
+        res_is_json=True,
+        raise_on_error=True,
+    ):
+        """Helper function for handling get requests
+
+        Keyword arguments:
+        url -- full path to endpoint
+        params -- dictionary of parameters for endpoint (default: None)
+        res_is_json -- boolean of whether expected result is json
+            (default: True)
+        raise_on_error -- boolean of whether should raise exception if there
+            is an error (default: True)
+        """
+        params = params or {}
+        LOGGER.debug("sending request url=%s with params=%s", url, params)
+        res = requests.get(url, params)
+        if res.status_code != 200:
+            LOGGER.error(
+                "Failed with status_code=%s in url=%s with params=%s",
+                res.status_code, url, params)
+            try:
+                error_msg = res.json()
+                LOGGER.error(error_msg)
+            except Exception as ex:  # pylint: disable=broad-except
+                LOGGER.exception(
+                    "error was not a valid json: %s", res)
+                if raise_on_error:
+                    raise ex
+            if raise_on_error:
+                raise Exception(error_msg)
+        if res_is_json:
+            try:
+                res = res.json()
+            except Exception as ex:  # pylint: disable=broad-except
+                LOGGER.exception(
+                    "result with status_code=%s was not a valid json",
+                    res.status_code
+                )
+                if raise_on_error:
+                    raise ex
+        return res
+
+    def _request_get_paginated(
         self,
         url,
-        params,
+        params=None,
         page=None,
         per_page=20,
+        raise_on_error=True,
     ):
         """ Helper function for handling get requests with pagination
 
         Keyword arguments:
         url -- full path to endpoint
-        params -- dictionary of parameters for endpoint
+        params -- dictionary of parameters for endpoint (default: None)
         page -- interger page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- interger number of records per page (default: 20 but only
             honored if a valid `page` is passed in)
+        raise_on_error -- boolean of whether should raise exception if there
+            is an error (default: True)
         """
+        params = params or {}
         res = []
         if page is not None and page > -1:
             next_page = page
         else:
             next_page = 0  # pages start at 0
-            per_page = 100
         while True:
-            LOGGER.debug("sending request url=%s with params=%s", url, params)
             params["page"] = next_page
             params["pageSize"] = per_page
-            this_res = requests.get(url, params)
-            if this_res.status_code != 200:
-                LOGGER.error(
-                    "Failed with status_code=%s in url=%s with params=%s",
-                    this_res.status_code, url, params)
-                try:
-                    LOGGER.error(this_res.json()["error"])
-                except Exception:  # pylint: disable=broad-except
-                    LOGGER.exception("result was not a valid json")
-                if page is not None:
-                    break
-                next_page = page + 1
-                continue
-
-            this_data = this_res.json()["data"]
+            this_res = self._request_get(
+                url, params, raise_on_error=raise_on_error)
+            if not this_res:
+                break
+            this_data = this_res["data"]
             this_res = this_data["results"]
             if not this_res:
                 break
@@ -101,7 +145,7 @@ class VeilClient(Web3Client):
         per_page=20,
         force_refresh=False,
     ):
-        """Get available markets optionally filterd on channel or status
+        """Fetch list of markets optionally filterd on channel or status
         Note: Public endpoint, does not need an account
 
         Keyword arguments:
@@ -109,9 +153,15 @@ class VeilClient(Web3Client):
             (default: None which means no filtering based on channel)
         status -- str from `constants.VeilStatus` for filtering
             (default: None which means no filtering based on status)
+        page -- interger page number to get results from. Note that first page
+            is at page=0 (default: None which means get all pages)
+        per_page -- interger number of records per page (default: 20 but only
+            honored if a valid `page` is passed in)
+        force_refresh -- boolean of whether results should be fetched again
+            from server or from in-memory cache (default: False)
         """
         if not force_refresh and self._markets is not None:
-            _markets = self._markets.get((channel, status))
+            _markets = self._markets.get((channel, status, page, per_page))
             if _markets is not None:
                 return _markets
         params = {}
@@ -119,11 +169,35 @@ class VeilClient(Web3Client):
             params["channel"] = channel
         if status:
             params["status"] = status
-        _markets = self._request_get(
+        _markets = self._request_get_paginated(
             url="{}{}".format(self._veil_api_url, "markets"),
             params=params,
             page=page,
             per_page=per_page,
         )
-        self._markets[(channel, status)] = _markets
+        self._markets[(channel, status, page, per_page)] = _markets
         return _markets
+
+    def get_market(
+        self,
+        slug,
+        force_refresh=False,
+    ):
+        """Fetch a single market using "slug" (a relatively short human-readable identifier)
+        Note: Public endpoint, does not need an account
+
+        Keyword arguments:
+        slug -- string "slug" (relatively short human-readable identifier)
+            from /markets API call
+        force_refresh -- boolean of whether results should be fetched again
+            from server or from in-memory cache (default: False)
+        """
+        if not force_refresh and self._markets is not None:
+            _markets = self._markets.get(slug)
+            if _markets is not None:
+                return _markets
+        _market = self._request_get(
+            url="{}{}/{}".format(self._veil_api_url, "markets", slug),
+        )["data"]
+        self._markets[slug] = _market
+        return _market
