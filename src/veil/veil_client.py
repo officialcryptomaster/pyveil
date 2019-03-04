@@ -6,6 +6,7 @@ author: officialcryptomaster@gmail.com
 from typing import NamedTuple
 import logging
 import requests
+from hexbytes import HexBytes
 from veil.constants import NETWORK_INFO
 from utils.zeroexutils import ZeroExWeb3Client
 from utils.logutils import setup_logger
@@ -15,15 +16,21 @@ LOGGER = setup_logger(__name__, log_level=logging.DEBUG)
 
 
 class MarketStatus(NamedTuple):  # pylint: disable=too-few-public-methods
-    """MarketStatus value strings"""
+    """Market status value strings"""
     OPEN = "open"
     RESOLVED = "resolved"
 
 
 class TokenType(NamedTuple):  # pylint: disable=too-few-public-methods
-    """TokenType value strings"""
+    """Token type strings"""
     LONG = "long"
     SHORT = "short"
+
+
+class OrderSide(NamedTuple):  # pylint: disable=too-few-public-methods
+    """Order side value strings"""
+    BUY = "bid"
+    SELL = "ask"
 
 
 class VeilClient(ZeroExWeb3Client):
@@ -51,29 +58,40 @@ class VeilClient(ZeroExWeb3Client):
             private_key=private_key,
         )
         self._veil_api_url = NETWORK_INFO[self.network_id]["veil_api_url"]
+        self._session_challenge = None
+        self._session = None
         # cache markets by filter tuple
         self._markets = {}
 
-    @staticmethod
-    def _request_get(
+    def _str_arg_append(self):
+        """String to append to list of params for `__str__`"""
+        return f", authenticated={self._session is not None})"
+
+    def _request(  # pylint: disable=no-self-use
+        self,
+        method,
         url,
         params=None,
-        res_is_json=True,
         raise_on_error=True,
     ):
         """Helper function for handling get requests
 
         Keyword arguments:
+        method -- one of {'GET', 'POST'}
         url -- full path to endpoint
         params -- dictionary of parameters for endpoint (default: None)
-        res_is_json -- boolean of whether expected result is json
-            (default: True)
         raise_on_error -- boolean of whether should raise exception if there
             is an error (default: True)
         """
         params = params or {}
-        LOGGER.debug("sending request url=%s with params=%s", url, params)
-        res = requests.get(url, params)
+        LOGGER.debug("sending %s request url=%s with params=%s",
+                     method, url, params)
+        if method == "GET":
+            res = requests.get(url, params=params)
+        elif method == "POST":
+            res = requests.post(url, json=params)
+        else:
+            raise Exception("method must be one of {'GET', 'POST'}")
         if res.status_code != 200:
             LOGGER.error(
                 "Failed with status_code=%s in url=%s with params=%s",
@@ -88,7 +106,8 @@ class VeilClient(ZeroExWeb3Client):
                     raise ex
             if raise_on_error:
                 raise Exception(error_msg)
-        if res_is_json:
+        content_type = res.headers.get("content-type")
+        if "application/json" in content_type:
             try:
                 res = res.json()
             except Exception as ex:  # pylint: disable=broad-except
@@ -113,9 +132,9 @@ class VeilClient(ZeroExWeb3Client):
         Keyword arguments:
         url -- full path to endpoint
         params -- dictionary of parameters for endpoint (default: None)
-        page -- interger page number to get results from. Note that first page
+        page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
-        per_page -- interger number of records per page (default: 20 but only
+        per_page -- integer number of records per page (default: 20 but only
             honored if a valid `page` is passed in)
         raise_on_error -- boolean of whether should raise exception if there
             is an error (default: True)
@@ -129,8 +148,11 @@ class VeilClient(ZeroExWeb3Client):
         while True:
             params["page"] = next_page
             params["pageSize"] = per_page
-            this_res = self._request_get(
-                url, params, raise_on_error=raise_on_error)
+            this_res = self._request(
+                method="GET",
+                url=url,
+                params=params,
+                raise_on_error=raise_on_error)
             if not this_res:
                 break
             this_data = this_res["data"]
@@ -144,12 +166,67 @@ class VeilClient(ZeroExWeb3Client):
             next_page = next_page + 1
         return res
 
+    @property
+    def session_info(self):
+        """Get the session information (forces authentication if missing)"""
+        if self._session is None:
+            self.authenticate()
+        return self._session
+
+    @property
+    def session_token(self):
+        """Get the session token (forces authentication if missing)"""
+        if self._session is None:
+            self.authenticate()
+        return self._session["token"]
+
+    @property
+    def veil_account(self):
+        """Get the veil session account (forces authentication if missing"""
+        if self._session is None:
+            self.authenticate()
+        return self._session["account"]
+
+    def authenticate(self, force=False):
+        """Get a session challenge and sign it, then use it to get a valid
+        session token
+
+        Keyword argument:
+        force -- get and sign a new token regardless of whether we already
+            have a valid session token
+        """
+        if not force and self._session:
+            return
+        session_challenge_uid = self.get_session_challenge()["uid"]
+        signed_session_challenge_uid = self.sign_hash(
+            HexBytes(session_challenge_uid.encode("utf-8"))
+        )["signature"].hex()
+        self._session = self._request(
+            method="POST",
+            url="{}sessions".format(self._veil_api_url),
+            params={
+                "challengeUid": session_challenge_uid,
+                "message": session_challenge_uid,
+                "signature": signed_session_challenge_uid,
+            },
+        )["data"]
+        return self
+
+    def get_session_challenge(self):
+        """Get a session challenge for authentication"""
+        session_challenge = self._request(
+            method="POST",
+            url="{}session_challenges".format(self._veil_api_url)
+        )
+        self._session_challenge = session_challenge["data"]
+        return self._session_challenge
+
     def get_markets(
         self,
         channel=None,
         status=None,
         page=None,
-        per_page=20,
+        per_page=None,
         force_refresh=False,
     ):
         """Fetch list of markets optionally filterd on channel or status
@@ -160,10 +237,10 @@ class VeilClient(ZeroExWeb3Client):
             (default: None which means no filtering based on channel)
         status -- str from `MarketStatus` enum for filtering
             (default: None which means no filtering based on status)
-        page -- interger page number to get results from. Note that first page
+        page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
-        per_page -- interger number of records per page (default: 20 but only
-            honored if a valid `page` is passed in)
+        per_page -- integer number of records per page (default: None and
+            falls back to default value in `_request_get_paginated`)
         force_refresh -- boolean of whether results should be fetched again
             from server or from in-memory cache (default: False)
         """
@@ -177,7 +254,7 @@ class VeilClient(ZeroExWeb3Client):
         if status:
             params["status"] = status
         _markets = self._request_get_paginated(
-            url="{}{}".format(self._veil_api_url, "markets"),
+            url="{}markets".format(self._veil_api_url),
             params=params,
             page=page,
             per_page=per_page,
@@ -203,8 +280,87 @@ class VeilClient(ZeroExWeb3Client):
             _markets = self._markets.get(market_slug)
             if _markets is not None:
                 return _markets
-        _market = self._request_get(
-            url="{}{}/{}".format(self._veil_api_url, "markets", market_slug),
+        _market = self._request(
+            method="GET",
+            url="{}markets/{}".format(self._veil_api_url, market_slug),
         )["data"]
         self._markets[market_slug] = _market
         return _market
+
+    def get_bids(
+        self,
+        market_slug,
+        token_type,
+        page=None,
+        per_page=None,
+    ):
+        """Fetch the long or short orders for a given market
+        Note that long and short are mirror images of each other
+
+        Keyword arguments:
+        market_slug -- string "slug" (relatively short human-readable identifier)
+            from /markets API call
+        token_type -- string token type ("long" or "short") from `TokenType` enum
+        page -- integer page number to get results from. Note that first page
+            is at page=0 (default: None which means get all pages)
+        per_page -- integer number of records per page (default: None and
+            falls back to default value in `_request_get_paginated`)
+        """
+        return self._request_get_paginated(
+            url="{}markets/{}/{}/bids".format(
+                self._veil_api_url, market_slug, token_type),
+            page=page,
+            per_page=per_page
+        )
+
+    def get_asks(
+        self,
+        market_slug,
+        token_type,
+        page=None,
+        per_page=None
+    ):
+        """Fetch the bids orders for a given long or short market
+        Note that long and short are mirror images of each other
+
+        Keyword arguments:
+        market_slug -- string "slug" (relatively short human-readable identifier)
+            from /markets API call
+        token_type -- string token type ("long" or "short") from `TokenType` enum
+        page -- integer page number to get results from. Note that first page
+            is at page=0 (default: None which means get all pages)
+        per_page -- integer number of records per page (default: None and
+            falls back to default value in `_request_get_paginated`)
+        """
+        return self._request_get_paginated(
+            url="{}markets/{}/{}/asks".format(
+                self._veil_api_url, market_slug, token_type),
+            page=page,
+            per_page=per_page
+        )
+
+    def get_order_fills(
+        self,
+        market_slug,
+        token_type,
+        page=None,
+        per_page=None
+    ):
+        """Fetch the order fill history for a given long or short market
+        Note that long and short are mirror images of each other
+
+        Keyword arguments:
+        market_slug -- string "slug" (relatively short human-readable identifier)
+            from /markets API call
+        token_type -- string token type ("long" or "short") from `TokenType` enum
+        page -- integer page number to get results from. Note that first page
+            is at page=0 (default: None which means get all pages)
+        per_page -- integer number of records per page (default: None and
+            falls back to default value in `_request_get_paginated`)
+        """
+        return self._request_get_paginated(
+            url="{}markets/{}/{}/order_fills".format(
+                self._veil_api_url, market_slug, token_type),
+            page=page,
+            per_page=per_page
+        )

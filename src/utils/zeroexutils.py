@@ -80,7 +80,8 @@ class ZrxOrderInfo:  # pylint: disable=too-few-public-methods
 
     def __str__(self):
         return (
-            f"[{self.__name__}]({self.order_status}, {self.order_hash.hex()}"
+            f"[{self.__name__}](status={self.order_status}"
+            f", order_hash={self.order_hash.hex()}"
             f", filled_amount={self.order_taker_asset_filled_amount})")
 
     __repr__ = __str__

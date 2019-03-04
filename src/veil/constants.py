@@ -18,9 +18,9 @@ DEFAULT_PER_PAGE = 20
 
 NETWORK_INFO = {
     NetworkId.MAINNET: {
-        "veil_api_url": "https://api.veil.market/api/v1/",
+        "veil_api_url": "https://api.veil.co/api/v1/",
     },
     NetworkId.KOVAN: {
-        "veil_api_url": "https://api.kovan.veil.market/api/v1/",
+        "veil_api_url": "https://api.kovan.veil.co/api/v1/",
     },
 }

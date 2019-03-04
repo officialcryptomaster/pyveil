@@ -57,7 +57,12 @@ class Web3Client:
         return (
             f"[{self.__name__}](network:{self.network_id}"
             f", web_3rpc_url={self._web3_rpc_url}"
-            f", account_addres={self.account_address}")
+            f", account_addres={self.account_address}"
+            f"{self._str_arg_append()})")
+
+    def _str_arg_append(self):  # pylint: disable=no-self-use
+        """String to append to list of params for `__str__`"""
+        return ""
 
     __repr__ = __str__
 
