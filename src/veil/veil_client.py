@@ -3,7 +3,7 @@ Client for interacting with veil.co API
 
 author: officialcryptomaster@gmail.com
 """
-from typing import NamedTuple
+from enum import Enum
 import logging
 import requests
 from hexbytes import HexBytes
@@ -15,22 +15,31 @@ from utils.logutils import setup_logger
 LOGGER = setup_logger(__name__, log_level=logging.DEBUG)
 
 
-class MarketStatus(NamedTuple):  # pylint: disable=too-few-public-methods
+class MarketStatus(Enum):  # pylint: disable=too-few-public-methods
     """Market status value strings"""
     OPEN = "open"
     RESOLVED = "resolved"
 
 
-class TokenType(NamedTuple):  # pylint: disable=too-few-public-methods
+class TokenType(Enum):  # pylint: disable=too-few-public-methods
     """Token type strings"""
     LONG = "long"
     SHORT = "short"
 
 
-class OrderSide(NamedTuple):  # pylint: disable=too-few-public-methods
+class OrderSide(Enum):  # pylint: disable=too-few-public-methods
     """Order side value strings"""
     BUY = "bid"
     SELL = "ask"
+
+
+class OrderStatus(Enum):  # pylint: disable=too-few-public-methods
+    """Order status value strings"""
+    PENDING = "pending"
+    OPEN = "open"
+    FILLEd = "filled"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
 
 
 class VeilClient(ZeroExWeb3Client):
@@ -141,7 +150,7 @@ class VeilClient(ZeroExWeb3Client):
         page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: None and
-            falls back to default value in `_request_get_paginated`)
+            falls back to default value in `_request_paginated`)
         force_refresh -- boolean of whether results should be fetched again
             from server or from in-memory cache (default: False)
         """
@@ -154,7 +163,8 @@ class VeilClient(ZeroExWeb3Client):
             params["channel"] = channel
         if status:
             params["status"] = status
-        _markets = self._request_get_paginated(
+        _markets = self._request_paginated(
+            method="GET",
             url="{}markets".format(self._veil_api_url),
             params=params,
             page=page,
@@ -201,15 +211,18 @@ class VeilClient(ZeroExWeb3Client):
         Keyword arguments:
         market_slug -- string "slug" (relatively short human-readable identifier)
             from /markets API call
-        token_type -- string token type ("long" or "short") from `TokenType` enum
+        token_type --  value from `TokenType` enum (i.e. SHORT or LONG)
         page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: None and
-            falls back to default value in `_request_get_paginated`)
+            falls back to default value in `_request_paginated`)
         """
-        return self._request_get_paginated(
+        if not isinstance(token_type, TokenType):
+            token_type = TokenType(token_type)
+        return self._request_paginated(
+            method="GET",
             url="{}markets/{}/{}/bids".format(
-                self._veil_api_url, market_slug, token_type),
+                self._veil_api_url, market_slug, token_type.value),
             page=page,
             per_page=per_page
         )
@@ -227,15 +240,18 @@ class VeilClient(ZeroExWeb3Client):
         Keyword arguments:
         market_slug -- string "slug" (relatively short human-readable identifier)
             from /markets API call
-        token_type -- string token type ("long" or "short") from `TokenType` enum
+        token_type --  value from `TokenType` enum (i.e. SHORT or LONG)
         page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: None and
-            falls back to default value in `_request_get_paginated`)
+            falls back to default value in `_request_paginated`)
         """
-        return self._request_get_paginated(
+        if not isinstance(token_type, TokenType):
+            token_type = TokenType(token_type)
+        return self._request_paginated(
+            method="GET",
             url="{}markets/{}/{}/asks".format(
-                self._veil_api_url, market_slug, token_type),
+                self._veil_api_url, market_slug, token_type.value),
             page=page,
             per_page=per_page
         )
@@ -253,42 +269,87 @@ class VeilClient(ZeroExWeb3Client):
         Keyword arguments:
         market_slug -- string "slug" (relatively short human-readable identifier)
             from /markets API call
-        token_type -- string token type ("long" or "short") from `TokenType` enum
+        token_type --  value from `TokenType` enum (i.e. SHORT or LONG)
         page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: None and
-            falls back to default value in `_request_get_paginated`)
+            falls back to default value in `_request_paginated`)
         """
-        return self._request_get_paginated(
+        if not isinstance(token_type, TokenType):
+            token_type = TokenType(token_type)
+        return self._request_paginated(
+            method="GET",
             url="{}markets/{}/{}/order_fills".format(
-                self._veil_api_url, market_slug, token_type),
+                self._veil_api_url, market_slug, token_type.value),
             page=page,
             per_page=per_page
         )
+
+    def get_my_orders(
+        self,
+        market_slug,
+        order_status=OrderStatus.OPEN,
+        page=None,
+        per_page=None,
+    ):
+        """Get all orders associated with the user
+
+        Keyword arguments:
+        market_slug -- string "slug" (relatively short human-readable identifier)
+            from /markets API call
+        order_status -- value from `OrderStatus` enum (default: OrderStats.OPEN)
+        page -- integer page number to get results from. Note that first page
+            is at page=0 (default: None which means get all pages)
+        per_page -- integer number of records per page (default: None and
+            falls back to default value in `_request_paginated`)
+        """
+        if order_status and not isinstance(order_status, OrderStatus):
+            order_status = OrderStatus(order_status)
+        params = {
+            "market": market_slug
+        }
+        if order_status is not None:
+            params["status"] = order_status.value
+        orders = self._request_paginated(
+            method="GET",
+            url="{}orders".format(self._veil_api_url),
+            params=params,
+            page=page,
+            per_page=per_page,
+            requires_session=True,
+        )
+        return orders
 
     def _request(  # pylint: disable=no-self-use
         self,
         method,
         url,
         params=None,
+        requires_session=False,
         raise_on_error=True,
     ):
         """Helper function for handling get requests
 
         Keyword arguments:
-        method -- one of {'GET', 'POST'}
+        method -- one of {'GET', 'POST', 'DELETE'}
         url -- full path to endpoint
         params -- dictionary of parameters for endpoint (default: None)
+        requires_session -- boolean of whether the request requires the session
+            token to be passed in the header (default: False)
         raise_on_error -- boolean of whether should raise exception if there
             is an error (default: True)
         """
         params = params or {}
+        headers = {}
         LOGGER.debug("sending %s request url=%s with params=%s",
                      method, url, params)
+        if requires_session:
+            headers = {
+                "Authorization": "Bearer {}".format(self.session_token)}
         if method == "GET":
-            res = requests.get(url, params=params)
+            res = requests.get(url, params=params, headers=headers)
         elif method == "POST":
-            res = requests.post(url, json=params)
+            res = requests.post(url, json=params, headers=headers)
         else:
             raise Exception("method must be one of {'GET', 'POST'}")
         if res.status_code != 200:
@@ -318,23 +379,28 @@ class VeilClient(ZeroExWeb3Client):
                     raise ex
         return res
 
-    def _request_get_paginated(
+    def _request_paginated(
         self,
+        method,
         url,
         params=None,
         page=None,
         per_page=20,
+        requires_session=False,
         raise_on_error=True,
     ):
         """ Helper function for handling get requests with pagination
 
         Keyword arguments:
+        method -- one of {'GET', 'POST', 'DELETE'}
         url -- full path to endpoint
         params -- dictionary of parameters for endpoint (default: None)
         page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: 20 but only
             honored if a valid `page` is passed in)
+        requires_session -- boolean of whether the request requires the session
+            token to be passed in the header (default: False)
         raise_on_error -- boolean of whether should raise exception if there
             is an error (default: True)
         """
@@ -348,10 +414,12 @@ class VeilClient(ZeroExWeb3Client):
             params["page"] = next_page
             params["pageSize"] = per_page
             this_res = self._request(
-                method="GET",
+                method=method,
                 url=url,
                 params=params,
-                raise_on_error=raise_on_error)
+                requires_session=requires_session,
+                raise_on_error=raise_on_error,
+            )
             if not this_res:
                 break
             this_data = this_res["data"]
