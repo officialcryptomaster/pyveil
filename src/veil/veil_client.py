@@ -67,105 +67,6 @@ class VeilClient(ZeroExWeb3Client):
         """String to append to list of params for `__str__`"""
         return f", authenticated={self._session is not None})"
 
-    def _request(  # pylint: disable=no-self-use
-        self,
-        method,
-        url,
-        params=None,
-        raise_on_error=True,
-    ):
-        """Helper function for handling get requests
-
-        Keyword arguments:
-        method -- one of {'GET', 'POST'}
-        url -- full path to endpoint
-        params -- dictionary of parameters for endpoint (default: None)
-        raise_on_error -- boolean of whether should raise exception if there
-            is an error (default: True)
-        """
-        params = params or {}
-        LOGGER.debug("sending %s request url=%s with params=%s",
-                     method, url, params)
-        if method == "GET":
-            res = requests.get(url, params=params)
-        elif method == "POST":
-            res = requests.post(url, json=params)
-        else:
-            raise Exception("method must be one of {'GET', 'POST'}")
-        if res.status_code != 200:
-            LOGGER.error(
-                "Failed with status_code=%s in url=%s with params=%s",
-                res.status_code, url, params)
-            try:
-                error_msg = res.json()
-                LOGGER.error(error_msg)
-            except Exception as ex:  # pylint: disable=broad-except
-                LOGGER.exception(
-                    "error was not a valid json: %s", res)
-                if raise_on_error:
-                    raise ex
-            if raise_on_error:
-                raise Exception(error_msg)
-        content_type = res.headers.get("content-type")
-        if "application/json" in content_type:
-            try:
-                res = res.json()
-            except Exception as ex:  # pylint: disable=broad-except
-                LOGGER.exception(
-                    "result with status_code=%s was not a valid json",
-                    res.status_code
-                )
-                if raise_on_error:
-                    raise ex
-        return res
-
-    def _request_get_paginated(
-        self,
-        url,
-        params=None,
-        page=None,
-        per_page=20,
-        raise_on_error=True,
-    ):
-        """ Helper function for handling get requests with pagination
-
-        Keyword arguments:
-        url -- full path to endpoint
-        params -- dictionary of parameters for endpoint (default: None)
-        page -- integer page number to get results from. Note that first page
-            is at page=0 (default: None which means get all pages)
-        per_page -- integer number of records per page (default: 20 but only
-            honored if a valid `page` is passed in)
-        raise_on_error -- boolean of whether should raise exception if there
-            is an error (default: True)
-        """
-        params = params or {}
-        res = []
-        if page is not None and page > -1:
-            next_page = page
-        else:
-            next_page = 0  # pages start at 0
-        while True:
-            params["page"] = next_page
-            params["pageSize"] = per_page
-            this_res = self._request(
-                method="GET",
-                url=url,
-                params=params,
-                raise_on_error=raise_on_error)
-            if not this_res:
-                break
-            this_data = this_res["data"]
-            this_res = this_data["results"]
-            if not this_res:
-                break
-            res.extend(this_res)
-            tot_pages = int(this_data["total"])
-            if page is not None or len(res) == tot_pages:
-                break
-            next_page = next_page + 1
-        return res
-
     @property
     def session_info(self):
         """Get the session information (forces authentication if missing)"""
@@ -196,7 +97,7 @@ class VeilClient(ZeroExWeb3Client):
             have a valid session token
         """
         if not force and self._session:
-            return
+            return self
         session_challenge_uid = self.get_session_challenge()["uid"]
         signed_session_challenge_uid = self.sign_hash(
             HexBytes(session_challenge_uid.encode("utf-8"))
@@ -364,3 +265,102 @@ class VeilClient(ZeroExWeb3Client):
             page=page,
             per_page=per_page
         )
+
+    def _request(  # pylint: disable=no-self-use
+        self,
+        method,
+        url,
+        params=None,
+        raise_on_error=True,
+    ):
+        """Helper function for handling get requests
+
+        Keyword arguments:
+        method -- one of {'GET', 'POST'}
+        url -- full path to endpoint
+        params -- dictionary of parameters for endpoint (default: None)
+        raise_on_error -- boolean of whether should raise exception if there
+            is an error (default: True)
+        """
+        params = params or {}
+        LOGGER.debug("sending %s request url=%s with params=%s",
+                     method, url, params)
+        if method == "GET":
+            res = requests.get(url, params=params)
+        elif method == "POST":
+            res = requests.post(url, json=params)
+        else:
+            raise Exception("method must be one of {'GET', 'POST'}")
+        if res.status_code != 200:
+            LOGGER.error(
+                "Failed with status_code=%s in url=%s with params=%s",
+                res.status_code, url, params)
+            try:
+                error_msg = res.json()
+                LOGGER.error(error_msg)
+            except Exception as ex:  # pylint: disable=broad-except
+                LOGGER.exception(
+                    "error was not a valid json: %s", res)
+                if raise_on_error:
+                    raise ex
+            if raise_on_error:
+                raise Exception(error_msg)
+        content_type = res.headers.get("content-type")
+        if "application/json" in content_type:
+            try:
+                res = res.json()
+            except Exception as ex:  # pylint: disable=broad-except
+                LOGGER.exception(
+                    "result with status_code=%s was not a valid json",
+                    res.status_code
+                )
+                if raise_on_error:
+                    raise ex
+        return res
+
+    def _request_get_paginated(
+        self,
+        url,
+        params=None,
+        page=None,
+        per_page=20,
+        raise_on_error=True,
+    ):
+        """ Helper function for handling get requests with pagination
+
+        Keyword arguments:
+        url -- full path to endpoint
+        params -- dictionary of parameters for endpoint (default: None)
+        page -- integer page number to get results from. Note that first page
+            is at page=0 (default: None which means get all pages)
+        per_page -- integer number of records per page (default: 20 but only
+            honored if a valid `page` is passed in)
+        raise_on_error -- boolean of whether should raise exception if there
+            is an error (default: True)
+        """
+        params = params or {}
+        res = []
+        if page is not None and page > -1:
+            next_page = page
+        else:
+            next_page = 0  # pages start at 0
+        while True:
+            params["page"] = next_page
+            params["pageSize"] = per_page
+            this_res = self._request(
+                method="GET",
+                url=url,
+                params=params,
+                raise_on_error=raise_on_error)
+            if not this_res:
+                break
+            this_data = this_res["data"]
+            this_res = this_data["results"]
+            if not this_res:
+                break
+            res.extend(this_res)
+            tot_pages = int(this_data["total"])
+            if page is not None or len(res) == tot_pages:
+                break
+            next_page = next_page + 1
+        return res
