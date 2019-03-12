@@ -5,44 +5,66 @@ author: officialcryptomaster@gmail.com
 """
 import time
 from datetime import datetime
-from veil.constants import DEFAULT_PAGE, DEFAULT_PER_PAGE
+from decimal import Decimal
 
 
-def now_epoch_secs():
+def now_epoch_secs() -> int:
     """integer seconds epoch of current time"""
     return int(time.time())
 
 
-def now_epoch_msecs():
+def now_epoch_msecs() -> int:
     """integer milliseconds epoch of current time"""
     return int(time.time() * 1e3)
 
 
-def now_epoch_usecs():
+def now_epoch_usecs() -> int:
     """integer micro-seconds epoch of current time"""
     return int(time.time() * 1e6)
 
 
-def epoch_secs_to_local_time_str(epoch_secs):
+def epoch_secs_to_local_time_str(epoch_secs) -> str:
     """Get a string of local time representation from integer epoch in seconds"""
     return datetime.fromtimestamp(epoch_secs).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def epoch_msecs_to_local_time_str(epoch_msecs):
+def epoch_msecs_to_local_time_str(epoch_msecs) -> str:
     """Get a string of local time representation from integer epoch in milliseconds"""
     return datetime.fromtimestamp(epoch_msecs/1000).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def epoch_secs_to_local_datetime(epoch_secs) -> datetime:
+    """Get a string of local time representation from integer epoch in seconds"""
+    return datetime.fromtimestamp(epoch_secs)
+
+
+def epoch_msecs_to_local_datetime(epoch_msecs) -> datetime:
+    """Get a string of local time representation from integer epoch in milliseconds"""
+    return datetime.fromtimestamp(epoch_msecs/1000)
+
+
 def try_(func, *args, **kwargs):
-    """Try to call a function and return _default_val if it fails"""
-    _default_val = kwargs.pop("_default_val", None)
+    """Try to call a function and return `_default` if it fails
+    Note: be careful that in order to have a fallback, you can supply
+    the keyword argument `_default`. If you supply anything other
+    than a keyword arg, it will result in it being passed to the wrapped
+    function and could cause unexpected behavior including always failing
+    with default value of None.
+    """
+    _default_val = kwargs.pop("_default", None)
     try:
         return func(*args, **kwargs)
     except Exception:  # pylint: disable=broad-except
         return _default_val
 
 
-def paginate(arr, page=DEFAULT_PAGE, per_page=DEFAULT_PER_PAGE):
+def assert_like_integer(value):
+    """Assert value is representing an integer"""
+    decimal_val = Decimal(value)
+    assert decimal_val == round(decimal_val), "value not like an integer"
+
+
+def paginate(arr, page=1, per_page=20):
     """Given an ordered iterable like a list and a page number, return
     a slice of the iterable which whose elements make up the page.
 
@@ -50,7 +72,7 @@ def paginate(arr, page=DEFAULT_PAGE, per_page=DEFAULT_PER_PAGE):
     arr -- an ordered iterable like a list
     page -- postive integer number of page to retrieve elements for. Note that
         Pages start at 1 (default: 1)
-    per_age -- positive integer number of elements per page
+    per_page -- positive integer number of elements per page (default: 20)
     """
     page_idx = page - 1
     return arr[page_idx: page_idx+per_page]
