@@ -3,55 +3,251 @@ Client for interacting with veil.co API
 
 author: officialcryptomaster@gmail.com
 """
+from datetime import datetime
 from enum import Enum
+from typing import Optional, List, Dict
+from decimal import Decimal
 import logging
 import requests
+import attr
 from hexbytes import HexBytes
 from veil.constants import NETWORK_INFO
-from utils.zeroexutils import ZeroExWeb3Client
 from utils.logutils import setup_logger
+from utils.miscutils import epoch_msecs_to_local_datetime
+from utils.web3utils import get_clean_address_or_throw, get_hexstr_or_throw
+from utils.zeroexutils import ZxWeb3Client, ZxSignedOrder
 
 
-LOGGER = setup_logger(__name__, log_level=logging.DEBUG)
+LOGGER = setup_logger(__name__, log_level=logging.INFO)
+
+TEN_18 = 10 ** 18
 
 
-class MarketStatus(Enum):  # pylint: disable=too-few-public-methods
+def eth_price_from_veil_price(veil_price, num_ticks):
+    """Get price in ether as a Decimal between 0 and 1
+
+    Keyword arguments:
+    veil_price -- price between "0" and num_ticks
+    num_ticks -- integer number of ticks (from `Market.num_ticks`)
+    """
+    if num_ticks is None:  # for binary markets
+        num_ticks = 10000.
+    return Decimal(veil_price) / num_ticks
+
+
+def veil_price_from_eth_price(eth_price, num_ticks):
+    """Get price in veil as integer-like string between 0 and num_ticks
+
+    Keyword arguments:
+    eth_price -- numeric price of 1 share in ETH (i.e. between 0 and 1)
+    num_ticks -- integer number of ticks (from `Market.num_ticks`)
+    """
+    if num_ticks is None:  # for binary markets
+        num_ticks = 10000.
+    return "{:.0f}".format(round(Decimal(eth_price) * num_ticks))
+
+
+def amount_from_veil_shares(veil_shares, num_ticks):
+    """Get numeric amount of shares beween 0 and 1 from veil shares
+
+    Keyword arguments:
+    veil_shares -- integer-like number of veil shares which is between "0"
+        and amount in WEI divided by num_ticks (e.g. for binary markets,
+        which have num_ticks=10000, amount of 1 is equal to 1e14 veil_shares
+        expressed as the integer string "100000000000000")
+    num_ticks -- integer number of ticks (from `Market.num_ticks`)
+    """
+    if num_ticks is None:  # for binary markets
+        num_ticks = 10000.
+    return Decimal(veil_shares) / TEN_18 * num_ticks
+
+
+def veil_shares_from_amount(amount, num_ticks):
+    """Get veil shares as string from amount
+
+    Note: veil_shares are integer string between "0" and amount in WEI divided by
+    num_ticks (e.g. for binary markets, which have num_ticks=10000, amount of 1
+    is equal to 1e14 veil_shares expressed as the integer string "100000000000000")
+
+    Keyword arguments:
+    amount -- numeric number of shares to purchase (i.e. 1 means purchase 1 share)
+    num_ticks -- integer number of ticks (from `Market.num_ticks`)
+    """
+    if num_ticks is None:  # for binary markets
+        num_ticks = 10000.
+    return "{:.0f}".format(
+        (Decimal(amount) * TEN_18 / num_ticks)
+    )
+
+
+class MarketStatus(Enum):
     """Market status value strings"""
     OPEN = "open"
     RESOLVED = "resolved"
 
 
-class TokenType(Enum):  # pylint: disable=too-few-public-methods
+class MarketType(Enum):
+    """Market type value strings"""
+    SCALAR = "scalar"
+    YESNO = "yesno"
+
+
+class TokenType(Enum):
     """Token type strings"""
     LONG = "long"
     SHORT = "short"
 
 
-class OrderSide(Enum):  # pylint: disable=too-few-public-methods
+class OrderSide(Enum):
     """Order side value strings"""
-    BUY = "bid"
-    SELL = "ask"
+    BUY = "buy"
+    SELL = "sell"
 
 
-class OrderStatus(Enum):  # pylint: disable=too-few-public-methods
+class OrderPriceType(Enum):
+    """Order price type value string"""
+    LIMIT = "limit"
+
+
+class OrderStatus(Enum):
     """Order status value strings"""
-    PENDING = "pending"
     OPEN = "open"
     FILLEd = "filled"
     CANCELED = "canceled"
     EXPIRED = "expired"
+    PENDING = "pending"
+    COMPLETED = "completed"
 
 
-class VeilClient(ZeroExWeb3Client):
+@attr.s(kw_only=True, slots=True)
+class BookEntry:
+    """An entry (bid or ask) in an Orderbook"""
+    price: int = attr.ib(converter=int)
+    token_amount: int = attr.ib(converter=int)
+
+
+def list_to_book_entries(list_of_dicts) -> List[BookEntry]:
+    """Get a list of book entries from list of dicts"""
+    return [BookEntry(**entry) for entry in list_of_dicts]
+
+
+@attr.s(kw_only=True, slots=True)
+class SideBook:
+    """Get a SideBook (can be bid-side or ask-side)"""
+    side: OrderSide = attr.ib(converter=OrderSide)
+    entries: List[BookEntry] = attr.ib(converter=list_to_book_entries)
+
+
+@attr.s(kw_only=True, slots=True)
+class OrderFill:
+    """Order fill object"""
+    uid: str = attr.ib()
+    price: int = attr.ib(converter=int)
+    side: OrderSide = attr.ib(converter=OrderSide)
+    token_amount: int = attr.ib(converter=int)
+    status: OrderStatus = attr.ib(converter=OrderStatus)
+    created_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+
+
+def optional_dict_to_order_fill(order_dict) -> Optional[OrderFill]:
+    """Convert a dict to OrderFill object if not None"""
+    if order_dict is None:
+        return None
+    return OrderFill(**order_dict)
+
+
+@attr.s(kw_only=True, slots=True)
+class Order:
+    """Order object"""
+    uid: str = attr.ib()
+    price: int = attr.ib(converter=int)
+    side: OrderSide = attr.ib(converter=OrderSide)
+    token_amount: int = attr.ib(converter=int)
+    token_amount_unfilled: int = attr.ib(converter=int)
+    status: OrderStatus = attr.ib(converter=OrderStatus)
+    token_type: TokenType = attr.ib(converter=TokenType)
+    fills: List = attr.ib(factory=list)
+
+
+def optional_dict_to_order(order_dict) -> Optional[Order]:
+    """Convert a dict to Order object if not None"""
+    if order_dict is None:
+        return None
+    return Order(**order_dict)
+
+
+@attr.s(kw_only=True, slots=True)
+class Market:
+    """Market information object"""
+    uid: str = attr.ib()
+    slug: str = attr.ib()
+    name: str = attr.ib(validator=attr.validators.instance_of(str))
+    address: str = attr.ib(converter=get_clean_address_or_throw)
+    created_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+    ends_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+    details: str = attr.ib(validator=attr.validators.instance_of(str))
+    num_ticks: int = attr.ib(converter=int)
+    min_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
+    max_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
+    limit_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
+    type: MarketType = attr.ib(converter=MarketType)
+    result: str = attr.ib()
+    long_buyback_order: Optional[Order] = attr.ib(
+        converter=attr.converters.optional(optional_dict_to_order))
+    short_buyback_order: Optional[Order] = attr.ib(
+        converter=attr.converters.optional(optional_dict_to_order))
+    long_token: str = attr.ib(converter=get_clean_address_or_throw)
+    short_token: str = attr.ib(converter=get_clean_address_or_throw)
+    denomination: str = attr.ib()
+    channel: str = attr.ib()
+    index: str = attr.ib()
+    predicted_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
+    last_trade_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
+    metadata: Dict = attr.ib(validator=attr.validators.instance_of(dict))
+    final_value: Optional[str] = attr.ib()
+    orders: Optional[List] = attr.ib(factory=list)
+
+
+def dict_to_zx_order(signed_order_dict) -> ZxSignedOrder:
+    """Get a ZxSignedOrder from a dict"""
+    return ZxSignedOrder(**signed_order_dict)
+
+
+@attr.s(kw_only=True, slots=True)
+class Quote:
+    """Quote object required for making an order"""
+    uid: str = attr.ib()
+    side: OrderSide = attr.ib(converter=OrderSide)
+    type: OrderPriceType = attr.ib(converter=OrderPriceType)
+    price: int = attr.ib(converter=int)
+    token_amount: int = attr.ib(converter=int)
+    currency_amount: int = attr.ib(converter=int)
+    order_hash: str = attr.ib(converter=get_hexstr_or_throw)
+    created_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+    expires_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+    quote_expires_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+    token: str = attr.ib(converter=get_clean_address_or_throw)
+    currency: str = attr.ib(converter=get_clean_address_or_throw)
+    fillable_token_amount: int = attr.ib(converter=int)
+    fee_amount: int = attr.ib(converter=int)
+    fee_breakdown: Optional[dict] = attr.ib()
+    zero_ex_order: ZxSignedOrder = attr.ib(converter=dict_to_zx_order)
+
+
+class VeilClient(ZxWeb3Client):
     """Client for interacting with veil.co API"""
 
     __name__ = "VeilClient"
+
+    VEIL_DECIMALS = 14
 
     def __init__(
         self,
         network_id,
         web3_rpc_url,
         private_key=None,
+        min_amount=0.005,
+        max_amount=1,
     ):
         """Create an instance of VeilClient to interact with the veil.co API
 
@@ -60,6 +256,8 @@ class VeilClient(ZeroExWeb3Client):
         web3_rpc_url -- string of the URL of the Web3 service
         private_key -- hex bytes or hex string of private key for signing transactions
             (must be convertible to `HexBytes`) (default: None)
+        min_amount -- minimum amount of shares allowable in single transaction
+        max_amount -- maximum amount of shares allowable in single transaction
         """
         super(VeilClient, self).__init__(
             network_id=network_id,
@@ -67,6 +265,8 @@ class VeilClient(ZeroExWeb3Client):
             private_key=private_key,
         )
         self._veil_api_url = NETWORK_INFO[self.network_id]["veil_api_url"]
+        self._min_amount = min_amount
+        self._max_amount = max_amount
         self._session_challenge = None
         self._session = None
         # cache markets by filter tuple
@@ -74,7 +274,11 @@ class VeilClient(ZeroExWeb3Client):
 
     def _str_arg_append(self):
         """String to append to list of params for `__str__`"""
-        return f", authenticated={self._session is not None})"
+        return (
+            f", authenticated={self._session is not None}"
+            f", min_amount={self._min_amount}"
+            f", max_amount={self._max_amount}"
+        )
 
     @property
     def session_info(self):
@@ -138,6 +342,7 @@ class VeilClient(ZeroExWeb3Client):
         page=None,
         per_page=None,
         force_refresh=False,
+        raw_json=False,
     ):
         """Fetch list of markets optionally filterd on channel or status
         Note: Public endpoint, does not need an account
@@ -153,30 +358,36 @@ class VeilClient(ZeroExWeb3Client):
             falls back to default value in `_request_paginated`)
         force_refresh -- boolean of whether results should be fetched again
             from server or from in-memory cache (default: False)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a list of `Market` objects (default: False)
         """
-        if not force_refresh and self._markets is not None:
-            _markets = self._markets.get((channel, status, page, per_page))
-            if _markets is not None:
-                return _markets
+        if not raw_json and not force_refresh and self._markets is not None:
+            markets = self._markets.get((channel, status, page, per_page))
+            if markets is not None:
+                return markets
         params = {}
         if channel:
             params["channel"] = channel
         if status:
             params["status"] = status
-        _markets = self._request_paginated(
+        markets = self._request_paginated(
             method="GET",
             url="{}markets".format(self._veil_api_url),
             params=params,
             page=page,
             per_page=per_page,
+            raw_json=raw_json,
         )
-        self._markets[(channel, status, page, per_page)] = _markets
-        return _markets
+        if not raw_json:
+            markets = [Market(**m) for m in markets]
+            self._markets[(channel, status, page, per_page)] = markets
+        return markets
 
     def get_market(
         self,
         market_slug,
         force_refresh=False,
+        raw_json=False,
     ):
         """Fetch a single market using the market "slug" identifier
         Note: Public endpoint, does not need an account
@@ -186,17 +397,21 @@ class VeilClient(ZeroExWeb3Client):
             from /markets API call
         force_refresh -- boolean of whether results should be fetched again
             from server or from in-memory cache (default: False)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `Market` object (default: False)
         """
-        if not force_refresh and self._markets is not None:
-            _markets = self._markets.get(market_slug)
-            if _markets is not None:
-                return _markets
-        _market = self._request(
+        if not raw_json and not force_refresh and self._markets is not None:
+            market = self._markets.get(market_slug)
+            if market is not None:
+                return market
+        market = self._request(
             method="GET",
             url="{}markets/{}".format(self._veil_api_url, market_slug),
-        )["data"]
-        self._markets[market_slug] = _market
-        return _market
+        )
+        if not raw_json:
+            market = Market(**market["data"])
+            self._markets[market_slug] = market
+        return market
 
     def get_bids(
         self,
@@ -204,6 +419,7 @@ class VeilClient(ZeroExWeb3Client):
         token_type,
         page=None,
         per_page=None,
+        raw_json=False,
     ):
         """Fetch the long or short orders for a given market
         Note that long and short are mirror images of each other
@@ -211,28 +427,35 @@ class VeilClient(ZeroExWeb3Client):
         Keyword arguments:
         market_slug -- string "slug" (relatively short human-readable identifier)
             from /markets API call
-        token_type --  value from `TokenType` enum (i.e. SHORT or LONG)
+        token_type --  value from `TokenType` enum (.e.g. "short", "long")
         page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: None and
             falls back to default value in `_request_paginated`)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a bid `SideBook` object (default: False)
         """
         if not isinstance(token_type, TokenType):
             token_type = TokenType(token_type)
-        return self._request_paginated(
+        bids = self._request_paginated(
             method="GET",
             url="{}markets/{}/{}/bids".format(
                 self._veil_api_url, market_slug, token_type.value),
             page=page,
-            per_page=per_page
+            per_page=per_page,
+            raw_json=raw_json,
         )
+        if not raw_json:
+            bids = SideBook(side=OrderSide.BUY, entries=bids)
+        return bids
 
     def get_asks(
         self,
         market_slug,
         token_type,
         page=None,
-        per_page=None
+        per_page=None,
+        raw_json=False,
     ):
         """Fetch the bids orders for a given long or short market
         Note that long and short are mirror images of each other
@@ -240,28 +463,35 @@ class VeilClient(ZeroExWeb3Client):
         Keyword arguments:
         market_slug -- string "slug" (relatively short human-readable identifier)
             from /markets API call
-        token_type --  value from `TokenType` enum (i.e. SHORT or LONG)
+        token_type --  value from `TokenType` enum (e.g. "short", "long")
         page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: None and
             falls back to default value in `_request_paginated`)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a ask `SideBook` object (default: False)
         """
         if not isinstance(token_type, TokenType):
             token_type = TokenType(token_type)
-        return self._request_paginated(
+        asks = self._request_paginated(
             method="GET",
             url="{}markets/{}/{}/asks".format(
                 self._veil_api_url, market_slug, token_type.value),
             page=page,
-            per_page=per_page
+            per_page=per_page,
+            raw_json=raw_json
         )
+        if not raw_json:
+            asks = SideBook(side=OrderSide.SELL, entries=asks)
+        return asks
 
     def get_order_fills(
         self,
         market_slug,
         token_type,
         page=None,
-        per_page=None
+        per_page=None,
+        raw_json=False,
     ):
         """Fetch the order fill history for a given long or short market
         Note that long and short are mirror images of each other
@@ -269,21 +499,93 @@ class VeilClient(ZeroExWeb3Client):
         Keyword arguments:
         market_slug -- string "slug" (relatively short human-readable identifier)
             from /markets API call
-        token_type --  value from `TokenType` enum (i.e. SHORT or LONG)
+        token_type --  value from `TokenType` enum (e.g. "short", "long")
         page -- integer page number to get results from. Note that first page
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: None and
             falls back to default value in `_request_paginated`)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `OrderFill` object (default: False)
         """
         if not isinstance(token_type, TokenType):
             token_type = TokenType(token_type)
-        return self._request_paginated(
+        order_fills = self._request_paginated(
             method="GET",
             url="{}markets/{}/{}/order_fills".format(
                 self._veil_api_url, market_slug, token_type.value),
             page=page,
-            per_page=per_page
+            per_page=per_page,
+            raw_json=raw_json,
         )
+        if not raw_json:
+            order_fills = [OrderFill(**order_fill) for order_fill in order_fills]
+        return order_fills
+
+    def get_quote(
+        self,
+        market,
+        token_type,
+        side,
+        amount,
+        price,
+        order_price_type=OrderPriceType.LIMIT,
+        raw_json=False,
+    ):
+        """Get a Veil quote which is used to calculate fees and generate a 0x unsigned order
+        which can in turn be used to create a Veil order.
+
+        Keyword arguments:
+        market -- Market instance
+        token_type --  value from `TokenType` enum (.e.g. "short", "long")
+        side -- value from `OrderSide` enum (i.e. "buy", "sell")
+        amount -- numeric-like token amount (1 means 1 share)
+        price -- numeric-like price in ETH (i.e. between 0 and 1)
+        order_price_type -- value from `OrderPriceType` enum (default: OrderPriceType.LIMIT)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `Quote` object (default: False)
+        """
+        if not isinstance(side, OrderSide):
+            side = OrderSide(side)
+        if not isinstance(token_type, TokenType):
+            token_type = TokenType(token_type)
+        if token_type == TokenType.LONG:
+            token_address = market.long_token
+        elif token_type == TokenType.SHORT:
+            token_address = market.short_token
+        else:
+            raise Exception("token_type must be valid type from `TokenType` enum")
+        amount = Decimal(amount)
+        if amount < self._min_amount or amount > self._max_amount:
+            raise TypeError(
+                ("quote amount outside acceptable range: amount='{}',"
+                 " but expected '{}' < amount < '{}'").format(
+                    amount, self._min_amount, self._max_amount))
+        price = Decimal(price)
+        if price < 0 or price > 1.0:
+            raise Exception(
+                ("quote price outisde acceptable range: got: price='{}',"
+                 " but expected {} < price < {}").format(
+                     price, market.min_price, market.max_price))
+        if not isinstance(order_price_type, OrderPriceType):
+            order_price_type = OrderPriceType(order_price_type)
+        params = {
+            "quote": {
+                "side": side.value,
+                "token": token_address,
+                "token_amount": veil_shares_from_amount(amount, market.num_ticks),
+                "price": veil_price_from_eth_price(price, market.num_ticks),
+                "type": order_price_type.value,
+            }
+        }
+        quote = self._request(
+            method="POST",
+            url="{}quotes".format(self._veil_api_url),
+            params=params,
+            requires_session=True,
+        )
+        if not raw_json:
+            quote = Quote(**quote["data"])
+        return quote
 
     def get_my_orders(
         self,
@@ -291,6 +593,7 @@ class VeilClient(ZeroExWeb3Client):
         order_status=OrderStatus.OPEN,
         page=None,
         per_page=None,
+        raw_json=False,
     ):
         """Get all orders associated with the user
 
@@ -302,6 +605,8 @@ class VeilClient(ZeroExWeb3Client):
             is at page=0 (default: None which means get all pages)
         per_page -- integer number of records per page (default: None and
             falls back to default value in `_request_paginated`)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a list of `Order` objects (default: False)
         """
         if order_status and not isinstance(order_status, OrderStatus):
             order_status = OrderStatus(order_status)
@@ -317,7 +622,10 @@ class VeilClient(ZeroExWeb3Client):
             page=page,
             per_page=per_page,
             requires_session=True,
+            raw_json=raw_json,
         )
+        if not raw_json:
+            orders = [Order(**order) for order in orders]
         return orders
 
     def _request(  # pylint: disable=no-self-use
@@ -366,6 +674,7 @@ class VeilClient(ZeroExWeb3Client):
                     raise ex
             if raise_on_error:
                 raise Exception(error_msg)
+        LOGGER.debug(res.content)
         content_type = res.headers.get("content-type")
         if "application/json" in content_type:
             try:
@@ -388,6 +697,7 @@ class VeilClient(ZeroExWeb3Client):
         per_page=20,
         requires_session=False,
         raise_on_error=True,
+        raw_json=False,
     ):
         """ Helper function for handling get requests with pagination
 
@@ -403,6 +713,8 @@ class VeilClient(ZeroExWeb3Client):
             token to be passed in the header (default: False)
         raise_on_error -- boolean of whether should raise exception if there
             is an error (default: True)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `Quote` object (default: False)
         """
         params = params or {}
         res = []
@@ -423,12 +735,14 @@ class VeilClient(ZeroExWeb3Client):
             if not this_res:
                 break
             this_data = this_res["data"]
-            this_res = this_data["results"]
-            if not this_res:
+            if not this_data["results"]:
                 break
-            res.extend(this_res)
-            tot_pages = int(this_data["total"])
-            if page is not None or len(res) == tot_pages:
-                break
+            if raw_json:
+                res.append(this_data)
+            else:
+                res.extend(this_data["results"])
+                tot_recs = int(this_data["total"])
+                if page is not None or len(res) == tot_recs:
+                    break
             next_page = next_page + 1
         return res
