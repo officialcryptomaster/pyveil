@@ -75,9 +75,7 @@ def veil_shares_from_amount(amount, num_ticks):
     """
     if num_ticks is None:  # for binary markets
         num_ticks = 10000.
-    return "{:.0f}".format(
-        (Decimal(amount) * TEN_18 / num_ticks)
-    )
+    return "{:.0f}".format(round(Decimal(amount) * TEN_18 / num_ticks))
 
 
 def dict_to_zx_order(signed_order_dict) -> ZxSignedOrder:
@@ -167,11 +165,13 @@ class SideBook:
 class OrderFill:
     """Order fill object"""
     uid: str = attr.ib()
-    price: int = attr.ib(converter=int)
-    side: OrderSide = attr.ib(converter=OrderSide)
-    token_amount: int = attr.ib(converter=int)
     status: OrderStatus = attr.ib(converter=OrderStatus)
+    token_amount: int = attr.ib(converter=int)
     created_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+    price: Optional[int] = attr.ib(
+        default=None, converter=attr.converters.optional(int))
+    side: Optional[OrderSide] = attr.ib(
+        default=None, converter=attr.converters.optional(OrderSide))
 
 
 def optional_dict_to_order_fill(order_dict) -> Optional[OrderFill]:
@@ -260,6 +260,13 @@ class Market:
         default=None, converter=attr.converters.optional(int))
     metadata: Dict = attr.ib(validator=attr.validators.instance_of(dict))
     final_value: Optional[str] = attr.ib(default=None)
+    is_deleted: bool = attr.ib(converter=bool)
+    is_delisted: bool = attr.ib(converter=bool)
+    is_trading_paused: bool = attr.ib(converter=bool)
+    is_draft: bool = attr.ib(converter=bool)
+    review_status: str = attr.ib(converter=str)
+    status: str = attr.ib(converter=str)
+    trade_fee: str = attr.ib()
 
 
 def optional_dict_to_market(market_dict) -> Optional[Market]:
