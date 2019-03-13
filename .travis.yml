@@ -8,3 +8,4 @@ install:
 script:
   - flake8 src tests
   - pylint src tests
+  - mypy --ignore-missing-imports src
