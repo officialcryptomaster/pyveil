@@ -205,7 +205,7 @@ class Web3Client:
 
     def sign_hash(self, hash_hex):
         """Returns the ec_signature from signing the hash_hex with eth-sign
-        Note: If you need to sign for 0x, then use `sign_hash_0x_compat`
+        Note: If you need to sign for 0x, then use `ZxWeb3Client.sign_hash_x_compat`
 
         Keyword argument:
         hash_hex -- hex bytes or hex str of a hash to sign
