@@ -80,6 +80,31 @@ def veil_shares_from_amount(amount, num_ticks):
     )
 
 
+def dict_to_zx_order(signed_order_dict) -> ZxSignedOrder:
+    """Get a ZxSignedOrder from a dict"""
+    return ZxSignedOrder(**signed_order_dict)
+
+
+def get_veil_zx_order_from_signed_order(signed_order):
+    """Get a Veil-compatible json 0x signed order from a `ZxSignedOrder` instance"""
+    return {
+        "maker_address": signed_order.maker_address_,
+        "taker_address": signed_order.taker_address_,
+        "fee_recipient_address": signed_order.fee_recipient_address_,
+        "sender_address": signed_order.sender_address_,
+        "exchange_address": signed_order.exchange_address_,
+        "maker_asset_amount": signed_order.maker_asset_amount_,
+        "taker_asset_amount": signed_order.taker_asset_amount_,
+        "maker_fee": signed_order.maker_fee_,
+        "taker_fee": signed_order.taker_fee_,
+        "salt": signed_order.salt_,
+        "expiration_time_seconds": str(signed_order.expiration_time_seconds_),
+        "maker_asset_data": signed_order.maker_asset_data_,
+        "taker_asset_data": signed_order.taker_asset_data_,
+        "signature": signed_order.signature,
+    }
+
+
 class MarketStatus(Enum):
     """Market status value strings"""
     OPEN = "open"
@@ -127,13 +152,13 @@ class BookEntry:
 
 
 def list_to_book_entries(list_of_dicts) -> List[BookEntry]:
-    """Get a list of book entries from list of dicts"""
+    """Get a list of `BookEntry` objects from list of dicts"""
     return [BookEntry(**entry) for entry in list_of_dicts]
 
 
 @attr.s(kw_only=True, slots=True)
 class SideBook:
-    """Get a SideBook (can be bid-side or ask-side)"""
+    """Get a `SideBook` (can be bid-side or ask-side)"""
     side: OrderSide = attr.ib(converter=OrderSide)
     entries: List[BookEntry] = attr.ib(converter=list_to_book_entries)
 
@@ -150,23 +175,43 @@ class OrderFill:
 
 
 def optional_dict_to_order_fill(order_dict) -> Optional[OrderFill]:
-    """Convert a dict to OrderFill object if not None"""
+    """Get a list of `OrderFill` objects from list of dicts"""
     if order_dict is None:
         return None
     return OrderFill(**order_dict)
+
+
+def list_of_dicts_to_list_of_fills(list_of_fills) -> List[OrderFill]:
+    """Convert list of dicts to list of `OrderFill` objects"""
+    return [OrderFill(**fill) for fill in list_of_fills]
 
 
 @attr.s(kw_only=True, slots=True)
 class Order:
     """Order object"""
     uid: str = attr.ib()
-    price: int = attr.ib(converter=int)
-    side: OrderSide = attr.ib(converter=OrderSide)
-    token_amount: int = attr.ib(converter=int)
-    token_amount_unfilled: int = attr.ib(converter=int)
     status: OrderStatus = attr.ib(converter=OrderStatus)
+    created_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+    expires_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
+    type: OrderPriceType = attr.ib(converter=OrderPriceType)
     token_type: TokenType = attr.ib(converter=TokenType)
-    fills: List = attr.ib(factory=list)
+    side: OrderSide = attr.ib(converter=OrderSide)
+    price: int = attr.ib(converter=int)
+    token: str = attr.ib(converter=get_clean_address_or_throw)
+    token_amount: int = attr.ib(converter=int)
+    token_amount_clean: Optional[str] = attr.ib(default=None)
+    token_amount_filled: int = attr.ib(converter=int)
+    currency: str = attr.ib(converter=get_clean_address_or_throw)
+    currency_amount: int = attr.ib(converter=int)
+    currency_amount_clean: Optional[str] = attr.ib(default=None)
+    currency_amount_filled: int = attr.ib(converter=int)
+    post_only: bool = attr.ib(converter=bool)
+    market: Optional[Dict] = attr.ib(factory=dict)
+    fills: List[OrderFill] = attr.ib(
+        converter=list_of_dicts_to_list_of_fills)
+    zero_ex_order: Optional[ZxSignedOrder] = attr.ib(
+        default=None,
+        converter=attr.converters.optional(dict_to_zx_order))
 
 
 def optional_dict_to_order(order_dict) -> Optional[Order]:
@@ -174,6 +219,11 @@ def optional_dict_to_order(order_dict) -> Optional[Order]:
     if order_dict is None:
         return None
     return Order(**order_dict)
+
+
+def list_of_dicts_to_orders(list_of_fills) -> List[Order]:
+    """Convert list of dicts to list of `Order` objects"""
+    return [Order(**fill) for fill in list_of_fills]
 
 
 @attr.s(kw_only=True, slots=True)
@@ -187,35 +237,41 @@ class Market:
     ends_at: datetime = attr.ib(converter=epoch_msecs_to_local_datetime)
     details: str = attr.ib(validator=attr.validators.instance_of(str))
     num_ticks: int = attr.ib(converter=int)
-    min_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
-    max_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
-    limit_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
+    min_price: Optional[int] = attr.ib(
+        default=None, converter=attr.converters.optional(int))
+    max_price: Optional[int] = attr.ib(
+        default=None, converter=attr.converters.optional(int))
+    limit_price: Optional[int] = attr.ib(
+        default=None, converter=attr.converters.optional(int))
     type: MarketType = attr.ib(converter=MarketType)
     result: str = attr.ib()
     long_buyback_order: Optional[Order] = attr.ib(
-        converter=attr.converters.optional(optional_dict_to_order))
+        default=None, converter=attr.converters.optional(optional_dict_to_order))
     short_buyback_order: Optional[Order] = attr.ib(
-        converter=attr.converters.optional(optional_dict_to_order))
+        default=None, converter=attr.converters.optional(optional_dict_to_order))
     long_token: str = attr.ib(converter=get_clean_address_or_throw)
     short_token: str = attr.ib(converter=get_clean_address_or_throw)
     denomination: str = attr.ib()
     channel: str = attr.ib()
     index: str = attr.ib()
-    predicted_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
-    last_trade_price: Optional[int] = attr.ib(converter=attr.converters.optional(int))
+    predicted_price: Optional[int] = attr.ib(
+        default=None, converter=attr.converters.optional(int))
+    last_trade_price: Optional[int] = attr.ib(
+        default=None, converter=attr.converters.optional(int))
     metadata: Dict = attr.ib(validator=attr.validators.instance_of(dict))
-    final_value: Optional[str] = attr.ib()
-    orders: Optional[List] = attr.ib(factory=list)
+    final_value: Optional[str] = attr.ib(default=None)
 
 
-def dict_to_zx_order(signed_order_dict) -> ZxSignedOrder:
-    """Get a ZxSignedOrder from a dict"""
-    return ZxSignedOrder(**signed_order_dict)
+def optional_dict_to_market(market_dict) -> Optional[Market]:
+    """Convert a dict to Market object if not None"""
+    if market_dict is None:
+        return None
+    return Market(**market_dict)
 
 
 @attr.s(kw_only=True, slots=True)
-class Quote:
-    """Quote object required for making an order"""
+class QuoteResponse:
+    """QuoteResponse object required for making an order"""
     uid: str = attr.ib()
     side: OrderSide = attr.ib(converter=OrderSide)
     type: OrderPriceType = attr.ib(converter=OrderPriceType)
@@ -230,7 +286,7 @@ class Quote:
     currency: str = attr.ib(converter=get_clean_address_or_throw)
     fillable_token_amount: int = attr.ib(converter=int)
     fee_amount: int = attr.ib(converter=int)
-    fee_breakdown: Optional[dict] = attr.ib()
+    fee_breakdown: Optional[dict] = attr.ib(default=None)
     zero_ex_order: ZxSignedOrder = attr.ib(converter=dict_to_zx_order)
 
 
@@ -404,14 +460,14 @@ class VeilClient(ZxWeb3Client):
             market = self._markets.get(market_slug)
             if market is not None:
                 return market
-        market = self._request(
+        res = self._request(
             method="GET",
             url="{}markets/{}".format(self._veil_api_url, market_slug),
         )
         if not raw_json:
-            market = Market(**market["data"])
-            self._markets[market_slug] = market
-        return market
+            res = Market(**res["data"])
+            self._markets[market_slug] = res
+        return res
 
     def get_bids(
         self,
@@ -437,7 +493,7 @@ class VeilClient(ZxWeb3Client):
         """
         if not isinstance(token_type, TokenType):
             token_type = TokenType(token_type)
-        bids = self._request_paginated(
+        res = self._request_paginated(
             method="GET",
             url="{}markets/{}/{}/bids".format(
                 self._veil_api_url, market_slug, token_type.value),
@@ -446,8 +502,8 @@ class VeilClient(ZxWeb3Client):
             raw_json=raw_json,
         )
         if not raw_json:
-            bids = SideBook(side=OrderSide.BUY, entries=bids)
-        return bids
+            res = SideBook(side=OrderSide.BUY, entries=res)
+        return res
 
     def get_asks(
         self,
@@ -473,7 +529,7 @@ class VeilClient(ZxWeb3Client):
         """
         if not isinstance(token_type, TokenType):
             token_type = TokenType(token_type)
-        asks = self._request_paginated(
+        res = self._request_paginated(
             method="GET",
             url="{}markets/{}/{}/asks".format(
                 self._veil_api_url, market_slug, token_type.value),
@@ -482,8 +538,8 @@ class VeilClient(ZxWeb3Client):
             raw_json=raw_json
         )
         if not raw_json:
-            asks = SideBook(side=OrderSide.SELL, entries=asks)
-        return asks
+            res = SideBook(side=OrderSide.SELL, entries=res)
+        return res
 
     def get_order_fills(
         self,
@@ -509,7 +565,7 @@ class VeilClient(ZxWeb3Client):
         """
         if not isinstance(token_type, TokenType):
             token_type = TokenType(token_type)
-        order_fills = self._request_paginated(
+        res = self._request_paginated(
             method="GET",
             url="{}markets/{}/{}/order_fills".format(
                 self._veil_api_url, market_slug, token_type.value),
@@ -518,10 +574,10 @@ class VeilClient(ZxWeb3Client):
             raw_json=raw_json,
         )
         if not raw_json:
-            order_fills = [OrderFill(**order_fill) for order_fill in order_fills]
-        return order_fills
+            res = [OrderFill(**order_fill) for order_fill in res]
+        return res
 
-    def get_quote(
+    def post_order(
         self,
         market,
         token_type,
@@ -531,8 +587,7 @@ class VeilClient(ZxWeb3Client):
         order_price_type=OrderPriceType.LIMIT,
         raw_json=False,
     ):
-        """Get a Veil quote which is used to calculate fees and generate a 0x unsigned order
-        which can in turn be used to create a Veil order.
+        """Get a Veil quote, sign the order on it and post the order
 
         Keyword arguments:
         market -- Market instance
@@ -542,7 +597,77 @@ class VeilClient(ZxWeb3Client):
         price -- numeric-like price in ETH (i.e. between 0 and 1)
         order_price_type -- value from `OrderPriceType` enum (default: OrderPriceType.LIMIT)
         raw_json -- boolean of whether the result should be left as a raw json or
-            converted to a `Quote` object (default: False)
+            converted to a `QuoteResponse` object (default: False)
+        """
+        quote = self._get_quote(
+            market=market,
+            token_type=token_type,
+            side=side,
+            amount=amount,
+            price=price,
+            order_price_type=order_price_type,
+        )
+        zx_order = quote.zero_ex_order
+        zx_order.signature = self.sign_hash_zx_compat(zx_order.hash)
+        order_res = self._post_order(
+            quote_id=quote.uid,
+            signed_order=zx_order,
+            raw_json=raw_json,
+        )
+        return order_res
+
+    def _post_order(
+        self,
+        quote_id,
+        signed_order,
+        raw_json=False,
+    ):
+        """Post a signed order
+
+        Keyword arguments:
+        quote_id -- string id of the quote acquired from `get_quote()`
+        signed_order -- instance of `ZxSignedOrder` that has been signed
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `Order` object (default: False)
+        """
+        params = {
+            "order": {
+                "quote_uid": quote_id,
+                "zero_ex_order": get_veil_zx_order_from_signed_order(signed_order)
+            }
+        }
+        res = self._request(
+            method="POST",
+            url="{}orders".format(self._veil_api_url),
+            params=params,
+            requires_session=True,
+        )
+        if not raw_json:
+            res = Order(**res["data"])
+            res.zero_ex_order = signed_order
+        return res
+
+    def _get_quote(
+        self,
+        market,
+        token_type,
+        side,
+        amount,
+        price,
+        order_price_type=OrderPriceType.LIMIT,
+        raw_json=False,
+    ):
+        """Get the template for 0x order to sign
+
+        Keyword arguments:
+        market -- Market instance
+        token_type --  value from `TokenType` enum (.e.g. "short", "long")
+        side -- value from `OrderSide` enum (i.e. "buy", "sell")
+        amount -- numeric-like token amount (1 means 1 share)
+        price -- numeric-like price in ETH (i.e. between 0 and 1)
+        order_price_type -- value from `OrderPriceType` enum (default: OrderPriceType.LIMIT)
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `QuoteResponse` object (default: False)
         """
         if not isinstance(side, OrderSide):
             side = OrderSide(side)
@@ -577,15 +702,15 @@ class VeilClient(ZxWeb3Client):
                 "type": order_price_type.value,
             }
         }
-        quote = self._request(
+        res = self._request(
             method="POST",
             url="{}quotes".format(self._veil_api_url),
             params=params,
             requires_session=True,
         )
         if not raw_json:
-            quote = Quote(**quote["data"])
-        return quote
+            res = QuoteResponse(**res["data"])
+        return res
 
     def get_my_orders(
         self,
@@ -628,6 +753,27 @@ class VeilClient(ZxWeb3Client):
             orders = [Order(**order) for order in orders]
         return orders
 
+    def cancel_order(
+        self,
+        order_id,
+        raw_json=False,
+    ):
+        """Cancel an order using its uid
+
+        Keyword argument:
+        order_id -- string `uid` from `QuoteResponse` or `Order`
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `Order` object (default: False)
+        """
+        res = res = self._request(
+            method="DELETE",
+            url="{}orders/{}".format(self._veil_api_url, order_id),
+            requires_session=True,
+        )
+        if not raw_json:
+            res = Order(**res["data"])
+        return res
+
     def _request(  # pylint: disable=no-self-use
         self,
         method,
@@ -658,6 +804,8 @@ class VeilClient(ZxWeb3Client):
             res = requests.get(url, params=params, headers=headers)
         elif method == "POST":
             res = requests.post(url, json=params, headers=headers)
+        elif method == "DELETE":
+            res = requests.delete(url, headers=headers)
         else:
             raise Exception("method must be one of {'GET', 'POST'}")
         if res.status_code != 200:
