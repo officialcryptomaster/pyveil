@@ -11,10 +11,11 @@ import logging
 import requests
 import attr
 from hexbytes import HexBytes
+import pandas as pd
 from veil.constants import NETWORK_INFO
 from utils.logutils import setup_logger
 from utils.miscutils import epoch_msecs_to_local_datetime
-from utils.web3utils import get_clean_address_or_throw, get_hexstr_or_throw
+from utils.web3utils import get_clean_address_or_throw, get_hexstr_or_throw, from_base_unit_amount
 from utils.zeroexutils import ZxWeb3Client, ZxSignedOrder
 
 
@@ -23,7 +24,7 @@ LOGGER = setup_logger(__name__, log_level=logging.INFO)
 TEN_18 = 10 ** 18
 
 
-def eth_price_from_veil_price(veil_price, num_ticks):
+def veil_price_to_eth(veil_price, num_ticks):
     """Get price in ether as a Decimal between 0 and 1
 
     Keyword arguments:
@@ -35,7 +36,7 @@ def eth_price_from_veil_price(veil_price, num_ticks):
     return Decimal(veil_price) / num_ticks
 
 
-def veil_price_from_eth_price(eth_price, num_ticks):
+def eth_to_veil_price(eth_price, num_ticks):
     """Get price in veil as integer-like string between 0 and num_ticks
 
     Keyword arguments:
@@ -47,7 +48,7 @@ def veil_price_from_eth_price(eth_price, num_ticks):
     return "{:.0f}".format(round(Decimal(eth_price) * num_ticks))
 
 
-def amount_from_veil_shares(veil_shares, num_ticks):
+def veil_shares_to_amount(veil_shares, num_ticks):
     """Get numeric amount of shares beween 0 and 1 from veil shares
 
     Keyword arguments:
@@ -62,7 +63,7 @@ def amount_from_veil_shares(veil_shares, num_ticks):
     return Decimal(veil_shares) / TEN_18 * num_ticks
 
 
-def veil_shares_from_amount(amount, num_ticks):
+def amount_to_veil_shares(amount, num_ticks):
     """Get veil shares as string from amount
 
     Note: veil_shares are integer string between "0" and amount in WEI divided by
@@ -278,7 +279,7 @@ def optional_dict_to_market(market_dict) -> Optional[Market]:
 
 @attr.s(kw_only=True, slots=True)
 class QuoteResponse:
-    """QuoteResponse object required for making an order"""
+    """Quote response object required for making an order"""
     uid: str = attr.ib()
     side: OrderSide = attr.ib(converter=OrderSide)
     type: OrderPriceType = attr.ib(converter=OrderPriceType)
@@ -295,6 +296,41 @@ class QuoteResponse:
     fee_amount: int = attr.ib(converter=int)
     fee_breakdown: Optional[dict] = attr.ib(default=None)
     zero_ex_order: ZxSignedOrder = attr.ib(converter=dict_to_zx_order)
+
+
+@attr.s(kw_only=True, slots=True)
+class MarketBalances:
+    """Market balances of a given user"""
+    slug: str = attr.ib()
+    long_balance: int = attr.ib(converter=int)
+    short_balance: int = attr.ib(converter=int)
+    long_balance_clean: int = attr.ib(converter=int)
+    short_balance_clean: int = attr.ib(converter=int)
+    veil_ether_balance: int = attr.ib(converter=int)
+    ether_balance: int = attr.ib(converter=int)
+
+    def __attrs_post_init__(self):
+        self.long_balance_clean = from_base_unit_amount(self.long_balance_clean)
+        self.short_balance_clean = from_base_unit_amount(self.short_balance_clean)
+        self.veil_ether_balance = from_base_unit_amount(self.veil_ether_balance)
+        self.ether_balance = from_base_unit_amount(self.ether_balance)
+
+
+def entries_to_dataframe(entries) -> pd.DataFrame:
+    """Turn data feed entries into a pandas dataframe for use of use"""
+    dataframe = pd.DataFrame(entries)
+    dataframe["timestamp"] = pd.to_datetime(dataframe["timestamp"], unit="ms")
+    return dataframe.set_index("timestamp")
+
+
+@attr.s(kw_only=True, slots=True)
+class DataFeed:
+    """Data feed object"""
+    uid: str = attr.ib()
+    name: str = attr.ib()
+    description: str = attr.ib()
+    denomination: str = attr.ib()
+    entries: pd.DataFrame = attr.ib(converter=entries_to_dataframe, repr=False)
 
 
 class VeilClient(ZxWeb3Client):
@@ -475,6 +511,28 @@ class VeilClient(ZxWeb3Client):
             res = Market(**res["data"])
             self._markets[market_slug] = res
         return res
+
+    def get_feed_data(
+        self,
+        feed_name,
+        scope="month",
+        raw_json=False,
+    ):
+        """Fetch feed data using `Market.index`
+
+        Keyword argument:
+        feed_name -- string feed name from `Market.index`
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `Market` object (default: False)
+        """
+        data_feed = self._request(
+            method="GET",
+            url="{}data_feeds/{}".format(self._veil_api_url, feed_name),
+            params={"scope": scope},
+        )
+        if not raw_json:
+            data_feed = DataFeed(**data_feed["data"])
+        return data_feed
 
     def get_bids(
         self,
@@ -704,8 +762,8 @@ class VeilClient(ZxWeb3Client):
             "quote": {
                 "side": side.value,
                 "token": token_address,
-                "token_amount": veil_shares_from_amount(amount, market.num_ticks),
-                "price": veil_price_from_eth_price(price, market.num_ticks),
+                "token_amount": amount_to_veil_shares(amount, market.num_ticks),
+                "price": eth_to_veil_price(price, market.num_ticks),
                 "type": order_price_type.value,
             }
         }
@@ -719,7 +777,7 @@ class VeilClient(ZxWeb3Client):
             res = QuoteResponse(**res["data"])
         return res
 
-    def get_my_orders(
+    def get_orders(
         self,
         market_slug,
         order_status=OrderStatus.OPEN,
@@ -727,7 +785,7 @@ class VeilClient(ZxWeb3Client):
         per_page=None,
         raw_json=False,
     ):
-        """Get all orders associated with the user
+        """Fetch orders associated with the user for a given market
 
         Keyword arguments:
         market_slug -- string "slug" (relatively short human-readable identifier)
@@ -780,6 +838,30 @@ class VeilClient(ZxWeb3Client):
         if not raw_json:
             res = Order(**res["data"])
         return res
+
+    def get_balances(
+        self,
+        market_slug,
+        raw_json=False,
+    ):
+        """Fetch position balances associated with the user for a given market
+
+        Keyword arguments:
+        market_slug -- string "slug" (relatively short human-readable identifier)
+            from /markets API call
+        raw_json -- boolean of whether the result should be left as a raw json or
+            converted to a `MarketBalances` object (default: False)
+        """
+        balances = self._request(
+            method="GET",
+            url="{}markets/{}/balances".format(self._veil_api_url, market_slug),
+            requires_session=True,
+        )
+        if not raw_json:
+            balances = balances["data"]
+            balances["slug"] = market_slug
+            balances = MarketBalances(**balances)
+        return balances
 
     def _request(  # pylint: disable=no-self-use
         self,
