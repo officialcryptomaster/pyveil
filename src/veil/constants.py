@@ -4,7 +4,7 @@ All constants should go in this file
 author: officialcryptomaster@gmail.com
 """
 from decimal import Decimal
-from zero_ex.contract_addresses import NetworkId
+from utils.web3utils import NetworkId
 
 NULL_ADDRESS = "0x0000000000000000000000000000000000000000"
 
