@@ -1,5 +1,6 @@
-Pyveil Client
+PyVeil Client
 =============
+[Pyveil Client](https://github.com/officialcryptomaster/pyveil) is a python client for interacting with [veil.co](https://veil.co) - a user-friendly prediction market based on [augur](https://www.augur.net/) and [0x](https://0x.org/).
 
 Quick Start Guide
 -----------------
